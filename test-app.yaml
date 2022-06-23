@@ -39,7 +39,7 @@ spec:
                 - test
             topologyKey: kubernetes.io/hostname
       containers:
-      - image: ghcr.io/giorgosdi/test:latest
+      - image: ghcr.io/giorgosdi/devops-challenge:v0.1
         imagePullPolicy: IfNotPresent
         name: test
         ports:
