@@ -1,0 +1,246 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test
+  namespace: test
+  labels:
+    app: test
+spec:
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 100%
+  selector:
+    matchLabels:
+      app: test
+  template:
+    metadata:
+      labels:
+        app: test
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - test
+              topologyKey: topology.kubernetes.io/zone
+            weight: 50
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - test
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - image: ghcr.io/giorgosdi/test:latest
+        imagePullPolicy: IfNotPresent
+        name: test
+        ports:
+        - containerPort: 8080
+        env:
+        - name: POSTGRESQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: dbusername
+              key: username
+              value: username
+        - name: POSTGRESQL_DBNAME
+          valueFrom:
+            secretKeyRef:
+              name: dbname
+              key: name
+              value: name
+        - name: POSTGRESQL_HOST
+          valueFrom:
+            secretKeyRef:
+              name: dbendpoint
+              key: endpoint
+              value: endpoint
+        - name: POSTGRESQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: dbpass
+              key: pass
+              value: pass
+        - name: POSTGRESQL_PORT
+          value: "5432"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+          limits:
+            cpu: 200m
+            memory: 200Mi
+---
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: test
+  namespace: test
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: test
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: test-pdb
+  namespace: test
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: test
+
+---
+apiVersion: external-secrets.io/v1beta1
+kind: SecretStore
+metadata:
+  name: eso-svcacc
+  namespace: test
+spec:
+  provider:
+    aws:
+      service: ParameterStore
+      region: eu-west-2
+      auth:
+        jwt:
+          serviceAccountRef:
+            name: eso
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: "dbusername"
+  namespace: test
+
+spec:
+  refreshInterval: 15s
+  secretStoreRef:
+    name: eso-svcacc
+    kind: SecretStore
+  target:
+    name: dbusername
+    creationPolicy: Owner
+    template:
+      type: opaque
+  data:
+  - secretKey: username
+    remoteRef:
+      key: /giorgos/postgres/database/username
+
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: "dbpass"
+  namespace: test
+
+spec:
+  refreshInterval: 15s
+  secretStoreRef:
+    name: eso-svcacc
+    kind: SecretStore
+  target:
+    name: dbpass
+    creationPolicy: Owner
+    template:
+      type: opaque
+  data:
+  - secretKey: pass
+    remoteRef:
+      key: /giorgos/postgres/database/master_password
+
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: "dbname"
+  namespace: test
+
+spec:
+  refreshInterval: 15s
+  secretStoreRef:
+    name: eso-svcacc
+    kind: SecretStore
+  target:
+    name: dbname
+    creationPolicy: Owner
+    template:
+      type: opaque
+  data:
+  - secretKey: name
+    remoteRef:
+      key: /giorgos/postgres/database/name
+
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: "dbendpoint"
+  namespace: test
+spec:
+  refreshInterval: 15s
+  secretStoreRef:
+    name: eso-svcacc
+    kind: SecretStore
+  target:
+    name: dbendpoint
+    creationPolicy: Owner
+    template:
+      type: opaque
+  data:
+  - secretKey: endpoint
+    remoteRef:
+      key: /giorgos/postgres/database/endpoint
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: giorgos-test-service
+  namespace: test
+spec:
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+  type: NodePort
+  selector:
+    app: test
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: giorgos-test-ingress
+  namespace: test
+  annotations:
+    kubernetes.io/ingress.class: "alb"
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    external-dns.alpha.kubernetes.io/hostname: test.giorgos.com
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: giorgos-test-service
+            port:
+              number: 80
+
